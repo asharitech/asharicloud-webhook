@@ -104,6 +104,11 @@ jobs:
           echo "Code SHA256: $CODE_SHA"
           echo "Last Modified: $LAST_MODIFIED"
           
+          # Wait for function update to complete
+          echo "Waiting for function update to complete..."
+          aws lambda wait function-updated \
+            --function-name ${{ env.LAMBDA_HANDLER_NAME }}
+          
           # Update function configuration with Datadog layers
           echo "Updating function configuration with Datadog layers..."
           aws lambda update-function-configuration \
@@ -140,6 +145,11 @@ jobs:
           echo "Function ARN: $FUNCTION_ARN"
           echo "Code SHA256: $CODE_SHA"
           echo "Last Modified: $LAST_MODIFIED"
+          
+          # Wait for function update to complete
+          echo "Waiting for function update to complete..."
+          aws lambda wait function-updated \
+            --function-name ${{ env.LAMBDA_DLQ_NAME }}
           
           # Update function configuration with Datadog layers
           echo "Updating DLQ processor configuration with Datadog layers..."
