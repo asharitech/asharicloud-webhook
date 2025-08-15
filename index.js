@@ -5,6 +5,9 @@
  * stores them in MongoDB for persistence and analysis, and publishes them to SNS.
  */
 
+// Datadog Lambda Library - must be imported first
+const { datadog } = require("datadog-lambda-js");
+
 const { SSMClient, GetParameterCommand } = require("@aws-sdk/client-ssm");
 const { SNSClient, PublishCommand } = require("@aws-sdk/client-sns");
 const { MongoClient } = require("mongodb");
@@ -66,7 +69,9 @@ class SNSService {
     topicArn,
     eventData,
     environment,
-    trackingIds = {}
+    trackingIds = {},
+    datadogTraceId = null,
+    datadogParentId = null
   ) {
     try {
       const message = {
@@ -113,6 +118,14 @@ class SNSService {
           "content-type": {
             DataType: "String",
             StringValue: "application/json",
+          },
+          "x-datadog-trace-id": {
+            DataType: "String",
+            StringValue: datadogTraceId || correlationId,
+          },
+          "x-datadog-parent-id": {
+            DataType: "String",
+            StringValue: datadogParentId || "",
           },
         },
       });
@@ -308,9 +321,9 @@ class WebhookProcessor {
 }
 
 /**
- * Main Lambda handler
+ * Main Lambda handler wrapped with Datadog tracing
  */
-exports.handler = async (event, context) => {
+exports.handler = datadog(async (event, context) => {
   // Check if the request method is GET and reject it (REST API format)
   const httpMethod = event.requestContext?.httpMethod;
   if (httpMethod === "GET") {
@@ -376,7 +389,13 @@ exports.handler = async (event, context) => {
 
     // Extract tracking IDs from headers (case-insensitive)
     const headers = eventData?.transport?.headers || {};
+    
+    // Check for Datadog trace headers first, then fall back to correlation IDs
+    const datadogTraceId = headers["x-datadog-trace-id"] || headers["X-Datadog-Trace-Id"];
+    const datadogParentId = headers["x-datadog-parent-id"] || headers["X-Datadog-Parent-Id"];
+    
     const correlationId =
+      datadogTraceId ||
       headers["x-correlation-id"] ||
       headers["X-Correlation-ID"] ||
       headers["x-correlation-id"] ||
@@ -389,8 +408,17 @@ exports.handler = async (event, context) => {
       headers["X-Request-Id"] ||
       require("crypto").randomUUID();
 
+    // Add trace context to logs
     console.log(
-      `Processing webhook with CorrelationId: ${correlationId}, RequestId: ${requestId}`
+      JSON.stringify({
+        message: "Processing webhook",
+        correlationId: correlationId,
+        requestId: requestId,
+        datadogTraceId: datadogTraceId,
+        datadogParentId: datadogParentId,
+        path: eventData.transport.path,
+        method: eventData.transport.method
+      })
     );
 
     const operations = [];
@@ -420,7 +448,9 @@ exports.handler = async (event, context) => {
             {
               correlationId: correlationId,
               requestId: requestId,
-            }
+            },
+            datadogTraceId,
+            datadogParentId
           );
           return { success: true, operation: "sns" };
         } catch (error) {
@@ -530,4 +560,4 @@ exports.handler = async (event, context) => {
     // Note: We don't close the MongoDB connection here to allow for connection reuse
     // Lambda will handle cleanup when the execution environment is destroyed
   }
-};
+});

@@ -11,6 +11,8 @@ env:
   LAMBDA_HANDLER_NAME: prod-webhook-receiver-handler
   LAMBDA_DLQ_NAME: prod-webhook-receiver-dlq-processor
   NODE_VERSION: '18'
+  DATADOG_NODE_LAYER: arn:aws:lambda:ap-southeast-3:464622532012:layer:Datadog-Node18-x:126
+  DATADOG_EXTENSION_LAYER: arn:aws:lambda:ap-southeast-3:464622532012:layer:Datadog-Extension:65
 
 jobs:
   test:
@@ -102,6 +104,16 @@ jobs:
           echo "Code SHA256: $CODE_SHA"
           echo "Last Modified: $LAST_MODIFIED"
           
+          # Update function configuration with Datadog layers
+          echo "Updating function configuration with Datadog layers..."
+          aws lambda update-function-configuration \
+            --function-name ${{ env.LAMBDA_HANDLER_NAME }} \
+            --layers "${{ env.DATADOG_NODE_LAYER }}" "${{ env.DATADOG_EXTENSION_LAYER }}" \
+            --environment "Variables={SNS_TOPIC_ARN=arn:aws:sns:ap-southeast-3:548813916580:prod-webhook-receiver-events,MONGODB_URI_PARAMETER=/webhook/receiver/prod/mongodb-uri,LOG_LEVEL=INFO,DD_API_KEY_SECRET_ARN=arn:aws:secretsmanager:ap-southeast-3:548813916580:secret:datadog/api-key-NvCLRK,DD_SITE=us5.datadoghq.com,DD_ENV=prod,DD_SERVICE=webhook-receiver,DD_VERSION=${{ github.sha }},DD_TRACE_ENABLED=true,DD_LOGS_INJECTION=true,DD_CAPTURE_LAMBDA_PAYLOAD=false}" \
+            --output json > config-result.json
+          
+          echo "✅ Datadog integration configured"
+          
           # Wait for function to be active
           echo "Waiting for function to be active..."
           aws lambda wait function-active \
@@ -128,6 +140,16 @@ jobs:
           echo "Function ARN: $FUNCTION_ARN"
           echo "Code SHA256: $CODE_SHA"
           echo "Last Modified: $LAST_MODIFIED"
+          
+          # Update function configuration with Datadog layers
+          echo "Updating DLQ processor configuration with Datadog layers..."
+          aws lambda update-function-configuration \
+            --function-name ${{ env.LAMBDA_DLQ_NAME }} \
+            --layers "${{ env.DATADOG_NODE_LAYER }}" "${{ env.DATADOG_EXTENSION_LAYER }}" \
+            --environment "Variables={DLQ_URL=https://sqs.ap-southeast-3.amazonaws.com/548813916580/prod-webhook-receiver-sns-dlq,ORIGINAL_TOPIC_ARN=arn:aws:sns:ap-southeast-3:548813916580:prod-webhook-receiver-events,CRITICAL_FAILURE_TOPIC_ARN=,ENVIRONMENT=prod,DD_API_KEY_SECRET_ARN=arn:aws:secretsmanager:ap-southeast-3:548813916580:secret:datadog/api-key-NvCLRK,DD_SITE=us5.datadoghq.com,DD_ENV=prod,DD_SERVICE=webhook-dlq-processor,DD_VERSION=${{ github.sha }},DD_TRACE_ENABLED=true,DD_LOGS_INJECTION=true}" \
+            --output json > dlq-config-result.json
+          
+          echo "✅ Datadog integration configured for DLQ processor"
           
           # Wait for function to be active
           echo "Waiting for function to be active..."

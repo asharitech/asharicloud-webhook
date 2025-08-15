@@ -8,6 +8,9 @@
  * 4. Sending notifications about critical failures
  */
 
+// Datadog Lambda Library - must be imported first
+const { datadog } = require("datadog-lambda-js");
+
 const {
   SQSClient,
   DeleteMessageCommand,
@@ -303,11 +306,11 @@ async function storeFailureDetails(failureInfo, webhookEvent, analysis) {
 }
 
 /**
- * Lambda handler
+ * Lambda handler wrapped with Datadog tracing
  * @param {Object} event - SQS event containing DLQ messages
  * @param {Object} context - Lambda context
  */
-exports.handler = async (event, context) => {
+exports.handler = datadog(async (event, context) => {
   console.log("DLQ Processor started", {
     messageCount: event.Records?.length || 0,
     requestId: context.awsRequestId,
@@ -355,4 +358,4 @@ exports.handler = async (event, context) => {
       results: results,
     }),
   };
-};
+});
