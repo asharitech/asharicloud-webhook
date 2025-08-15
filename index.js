@@ -7,6 +7,7 @@
 
 // Datadog Lambda Library - must be imported first
 const { datadog } = require("datadog-lambda-js");
+const tracer = require("dd-trace");
 
 const { SSMClient, GetParameterCommand } = require("@aws-sdk/client-ssm");
 const { SNSClient, PublishCommand } = require("@aws-sdk/client-sns");
@@ -119,14 +120,14 @@ class SNSService {
       };
 
       // Add Datadog trace ID if available
-      if (datadogTraceId || trackingIds.correlationId) {
+      if (datadogTraceId) {
         messageAttributes["x-datadog-trace-id"] = {
           DataType: "String",
-          StringValue: datadogTraceId || trackingIds.correlationId || require("crypto").randomUUID(),
+          StringValue: datadogTraceId,
         };
       }
 
-      // Only add parent ID if it exists
+      // Add Datadog span ID as parent ID for downstream services
       if (datadogParentId) {
         messageAttributes["x-datadog-parent-id"] = {
           DataType: "String",
@@ -401,12 +402,22 @@ exports.handler = datadog(async (event, context) => {
     // Extract tracking IDs from headers (case-insensitive)
     const headers = eventData?.transport?.headers || {};
     
-    // Check for Datadog trace headers first, then fall back to correlation IDs
-    const datadogTraceId = headers["x-datadog-trace-id"] || headers["X-Datadog-Trace-Id"];
-    const datadogParentId = headers["x-datadog-parent-id"] || headers["X-Datadog-Parent-Id"];
+    // Get current Datadog trace context from the Lambda execution
+    let currentTraceId = null;
+    let currentSpanId = null;
     
+    try {
+      const span = tracer.scope().active();
+      if (span) {
+        currentTraceId = span.context().toTraceId();
+        currentSpanId = span.context().toSpanId();
+      }
+    } catch (e) {
+      console.log("Could not get Datadog trace context:", e.message);
+    }
+    
+    // Use current trace context or fall back to headers/generated IDs
     const correlationId =
-      datadogTraceId ||
       headers["x-correlation-id"] ||
       headers["X-Correlation-ID"] ||
       headers["x-correlation-id"] ||
@@ -425,8 +436,8 @@ exports.handler = datadog(async (event, context) => {
         message: "Processing webhook",
         correlationId: correlationId,
         requestId: requestId,
-        datadogTraceId: datadogTraceId,
-        datadogParentId: datadogParentId,
+        datadogTraceId: currentTraceId,
+        datadogSpanId: currentSpanId,
         path: eventData.transport.path,
         method: eventData.transport.method
       })
@@ -460,8 +471,8 @@ exports.handler = datadog(async (event, context) => {
               correlationId: correlationId,
               requestId: requestId,
             },
-            datadogTraceId,
-            datadogParentId
+            currentTraceId,
+            currentSpanId
           );
           return { success: true, operation: "sns" };
         } catch (error) {
