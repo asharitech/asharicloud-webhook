@@ -1,0 +1,25 @@
+{
+    "name": "webhook-receiver-lambda",
+    "version": "1.0.0",
+    "description": "Lambda function to receive webhooks and store them in MongoDB",
+    "main": "index.js",
+    "scripts": {
+        "test": "echo \"Error: no test specified\" && exit 1"
+    },
+    "dependencies": {
+        "@aws-sdk/client-ssm": "^3.812.0",
+        "@aws-sdk/client-sns": "^3.812.0",
+        "mongodb": "^6.0.0"
+    },
+    "engines": {
+        "node": ">=18.0.0"
+    },
+    "keywords": [
+        "webhook",
+        "lambda",
+        "mongodb",
+        "aws"
+    ],
+    "author": "ashari.tech",
+    "license": "MIT"
+}

@@ -1,0 +1,199 @@
+name: Deploy to Lambda
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  AWS_REGION: ap-southeast-3
+  LAMBDA_HANDLER_NAME: prod-webhook-receiver-handler
+  LAMBDA_DLQ_NAME: prod-webhook-receiver-dlq-processor
+  NODE_VERSION: '18'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate code
+        run: |
+          echo "Validating Lambda handler files..."
+          node -c index.js
+          node -c dlq-processor.js
+          echo "✅ All Lambda handlers are valid"
+
+  deploy:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install production dependencies
+        run: |
+          npm ci --production
+          echo "Installed packages:"
+          npm list --depth=0
+
+      - name: Create deployment package
+        run: |
+          echo "Creating deployment package..."
+          zip -r deployment-package.zip . \
+            -x "*.git*" \
+            -x "*.github*" \
+            -x "*.gitignore" \
+            -x "*.md" \
+            -x "deployment-package.zip" \
+            -x "node_modules/.cache/*" \
+            -x "node_modules/.bin/*"
+          
+          echo "Package size: $(du -h deployment-package.zip | cut -f1)"
+          echo "Package contents (first 50 files):"
+          unzip -l deployment-package.zip | head -50
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy Main Handler Lambda
+        run: |
+          echo "Deploying to ${{ env.LAMBDA_HANDLER_NAME }}..."
+          
+          # Update function code
+          aws lambda update-function-code \
+            --function-name ${{ env.LAMBDA_HANDLER_NAME }} \
+            --zip-file fileb://deployment-package.zip \
+            --output json > update-result.json
+          
+          # Extract and display key information
+          FUNCTION_ARN=$(jq -r '.FunctionArn' update-result.json)
+          CODE_SHA=$(jq -r '.CodeSha256' update-result.json)
+          LAST_MODIFIED=$(jq -r '.LastModified' update-result.json)
+          
+          echo "✅ Main handler deployed successfully"
+          echo "Function ARN: $FUNCTION_ARN"
+          echo "Code SHA256: $CODE_SHA"
+          echo "Last Modified: $LAST_MODIFIED"
+          
+          # Wait for function to be active
+          echo "Waiting for function to be active..."
+          aws lambda wait function-active \
+            --function-name ${{ env.LAMBDA_HANDLER_NAME }}
+          
+          echo "✅ Function is active and ready"
+
+      - name: Deploy DLQ Processor Lambda
+        run: |
+          echo "Deploying to ${{ env.LAMBDA_DLQ_NAME }}..."
+          
+          # Update function code
+          aws lambda update-function-code \
+            --function-name ${{ env.LAMBDA_DLQ_NAME }} \
+            --zip-file fileb://deployment-package.zip \
+            --output json > dlq-update-result.json
+          
+          # Extract and display key information
+          FUNCTION_ARN=$(jq -r '.FunctionArn' dlq-update-result.json)
+          CODE_SHA=$(jq -r '.CodeSha256' dlq-update-result.json)
+          LAST_MODIFIED=$(jq -r '.LastModified' dlq-update-result.json)
+          
+          echo "✅ DLQ processor deployed successfully"
+          echo "Function ARN: $FUNCTION_ARN"
+          echo "Code SHA256: $CODE_SHA"
+          echo "Last Modified: $LAST_MODIFIED"
+          
+          # Wait for function to be active
+          echo "Waiting for function to be active..."
+          aws lambda wait function-active \
+            --function-name ${{ env.LAMBDA_DLQ_NAME }}
+          
+          echo "✅ Function is active and ready"
+
+      - name: Test Main Handler Deployment
+        run: |
+          echo "Testing deployed main handler..."
+          
+          # Invoke function with test payload
+          TEST_PAYLOAD='{
+            "requestContext": {
+              "httpMethod": "POST",
+              "domainName": "test.execute-api.ap-southeast-3.amazonaws.com",
+              "stage": "test",
+              "identity": {
+                "sourceIp": "127.0.0.1"
+              }
+            },
+            "path": "/test",
+            "headers": {
+              "Content-Type": "application/json"
+            },
+            "body": "{\"test\": \"deployment\"}"
+          }'
+          
+          echo "$TEST_PAYLOAD" > test-payload.json
+          
+          aws lambda invoke \
+            --function-name ${{ env.LAMBDA_HANDLER_NAME }} \
+            --payload file://test-payload.json \
+            --cli-binary-format raw-in-base64-out \
+            response.json
+          
+          # Check response
+          RESPONSE_STATUS=$(jq -r '.statusCode' response.json)
+          
+          if [ "$RESPONSE_STATUS" = "200" ]; then
+            echo "✅ Main handler test successful"
+            echo "Response:"
+            jq '.' response.json
+          else
+            echo "❌ Main handler test failed with status: $RESPONSE_STATUS"
+            echo "Response:"
+            cat response.json
+            exit 1
+          fi
+
+      - name: Publish Deployment Metrics
+        if: success()
+        run: |
+          # Get function metrics
+          MAIN_SIZE=$(aws lambda get-function --function-name ${{ env.LAMBDA_HANDLER_NAME }} \
+            --query 'Configuration.CodeSize' --output text)
+          DLQ_SIZE=$(aws lambda get-function --function-name ${{ env.LAMBDA_DLQ_NAME }} \
+            --query 'Configuration.CodeSize' --output text)
+          
+          echo "### Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Lambda Function | Code Size | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------------|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Main Handler | $(numfmt --to=iec-i --suffix=B $MAIN_SIZE) | ✅ Deployed |" >> $GITHUB_STEP_SUMMARY
+          echo "| DLQ Processor | $(numfmt --to=iec-i --suffix=B $DLQ_SIZE) | ✅ Deployed |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit:** ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Deployed at:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
