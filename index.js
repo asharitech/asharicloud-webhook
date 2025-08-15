@@ -6,7 +6,7 @@
  */
 
 // Datadog Lambda Library - must be imported first
-const { datadog } = require("datadog-lambda-js");
+const { datadog, getTraceHeaders } = require("datadog-lambda-js");
 const tracer = require("dd-trace");
 
 const { SSMClient, GetParameterCommand } = require("@aws-sdk/client-ssm");
@@ -406,14 +406,56 @@ exports.handler = datadog(async (event, context) => {
     let currentTraceId = null;
     let currentSpanId = null;
     
+    // Method 1: Try using getTraceHeaders from datadog-lambda-js
     try {
-      const span = tracer.scope().active();
-      if (span) {
-        currentTraceId = span.context().toTraceId();
-        currentSpanId = span.context().toSpanId();
+      const traceHeaders = getTraceHeaders();
+      console.log("Trace headers from getTraceHeaders:", JSON.stringify(traceHeaders));
+      
+      // Parse the x-datadog-trace-id and x-datadog-parent-id from headers
+      if (traceHeaders) {
+        // The headers might contain trace context in various formats
+        // Check for Datadog format headers
+        if (traceHeaders["x-datadog-trace-id"]) {
+          currentTraceId = traceHeaders["x-datadog-trace-id"];
+        }
+        if (traceHeaders["x-datadog-parent-id"]) {
+          currentSpanId = traceHeaders["x-datadog-parent-id"];
+        }
+        
+        // Also check for W3C trace context format
+        if (traceHeaders["traceparent"]) {
+          // traceparent format: version-trace-id-parent-id-flags
+          const parts = traceHeaders["traceparent"].split("-");
+          if (parts.length >= 3) {
+            // W3C trace ID is 32 hex chars, Datadog uses decimal
+            // We'll keep the original format for now
+            console.log("W3C traceparent found:", traceHeaders["traceparent"]);
+          }
+        }
       }
     } catch (e) {
-      console.log("Could not get Datadog trace context:", e.message);
+      console.log("Could not get trace headers from datadog-lambda-js:", e.message);
+    }
+    
+    // Method 2: Try using dd-trace tracer.scope().active() as fallback
+    if (!currentTraceId || !currentSpanId) {
+      try {
+        const span = tracer.scope().active();
+        if (span) {
+          currentTraceId = span.context().toTraceId();
+          currentSpanId = span.context().toSpanId();
+          console.log("Got trace context from dd-trace:", { traceId: currentTraceId, spanId: currentSpanId });
+        }
+      } catch (e) {
+        console.log("Could not get trace context from dd-trace:", e.message);
+      }
+    }
+    
+    // Method 3: Check environment variable _X_AMZN_TRACE_ID
+    if (!currentTraceId && process.env._X_AMZN_TRACE_ID) {
+      console.log("AWS X-Ray trace ID:", process.env._X_AMZN_TRACE_ID);
+      // X-Ray format: Root=1-5e13aa79-2817aede8f82c8e2b66b8d3f;Parent=07ef34e43eb6e609;Sampled=1
+      // We could parse this but it's in a different format than Datadog expects
     }
     
     // Use current trace context or fall back to headers/generated IDs
