@@ -84,50 +84,61 @@ class SNSService {
         isBase64Encoded: eventData.isBase64Encoded,
       };
 
+      // Build message attributes dynamically
+      const messageAttributes = {
+        environment: {
+          DataType: "String",
+          StringValue: environment,
+        },
+        method: {
+          DataType: "String",
+          StringValue: eventData.transport.method,
+        },
+        path: {
+          DataType: "String",
+          StringValue: eventData.transport.path,
+        },
+        contentType: {
+          DataType: "String",
+          StringValue: eventData.type,
+        },
+        "x-correlation-id": {
+          DataType: "String",
+          StringValue:
+            trackingIds.correlationId || require("crypto").randomUUID(),
+        },
+        "x-request-id": {
+          DataType: "String",
+          StringValue:
+            trackingIds.requestId || require("crypto").randomUUID(),
+        },
+        "content-type": {
+          DataType: "String",
+          StringValue: "application/json",
+        },
+      };
+
+      // Add Datadog trace ID if available
+      if (datadogTraceId || trackingIds.correlationId) {
+        messageAttributes["x-datadog-trace-id"] = {
+          DataType: "String",
+          StringValue: datadogTraceId || trackingIds.correlationId || require("crypto").randomUUID(),
+        };
+      }
+
+      // Only add parent ID if it exists
+      if (datadogParentId) {
+        messageAttributes["x-datadog-parent-id"] = {
+          DataType: "String",
+          StringValue: datadogParentId,
+        };
+      }
+
       const command = new PublishCommand({
         TopicArn: topicArn,
         Message: JSON.stringify(message),
         Subject: `Webhook Event - ${eventData.transport.method} ${eventData.transport.path}`,
-        MessageAttributes: {
-          environment: {
-            DataType: "String",
-            StringValue: environment,
-          },
-          method: {
-            DataType: "String",
-            StringValue: eventData.transport.method,
-          },
-          path: {
-            DataType: "String",
-            StringValue: eventData.transport.path,
-          },
-          contentType: {
-            DataType: "String",
-            StringValue: eventData.type,
-          },
-          "x-correlation-id": {
-            DataType: "String",
-            StringValue:
-              trackingIds.correlationId || require("crypto").randomUUID(),
-          },
-          "x-request-id": {
-            DataType: "String",
-            StringValue:
-              trackingIds.requestId || require("crypto").randomUUID(),
-          },
-          "content-type": {
-            DataType: "String",
-            StringValue: "application/json",
-          },
-          "x-datadog-trace-id": {
-            DataType: "String",
-            StringValue: datadogTraceId || trackingIds.correlationId || require("crypto").randomUUID(),
-          },
-          "x-datadog-parent-id": {
-            DataType: "String",
-            StringValue: datadogParentId || "",
-          },
-        },
+        MessageAttributes: messageAttributes,
       });
 
       const response = await this.snsClient.send(command);
