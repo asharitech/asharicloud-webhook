@@ -121,7 +121,7 @@ class SNSService {
           },
           "x-datadog-trace-id": {
             DataType: "String",
-            StringValue: datadogTraceId || correlationId,
+            StringValue: datadogTraceId || trackingIds.correlationId || require("crypto").randomUUID(),
           },
           "x-datadog-parent-id": {
             DataType: "String",
