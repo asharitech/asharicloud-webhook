@@ -119,6 +119,33 @@ class SNSService {
         },
       };
 
+      // Add headers as JSON string attribute for downstream services
+      // This allows downstream services to access all original headers
+      if (eventData.transport.headers) {
+        try {
+          const headersJson = JSON.stringify(eventData.transport.headers);
+          // SNS attributes have a size limit, truncate if necessary
+          // Each attribute value can be up to 256KB, but total message+attributes must be under 256KB
+          const maxHeaderSize = 50000; // Conservative 50KB limit for headers attribute
+          if (headersJson.length <= maxHeaderSize) {
+            messageAttributes["headers"] = {
+              DataType: "String",
+              StringValue: headersJson,
+            };
+          } else {
+            // Truncate headers if too large and add truncation indicator
+            const truncated = headersJson.substring(0, maxHeaderSize - 20) + ',"_truncated":true}';
+            messageAttributes["headers"] = {
+              DataType: "String",
+              StringValue: truncated,
+            };
+            console.warn(`Headers truncated from ${headersJson.length} to ${truncated.length} bytes`);
+          }
+        } catch (e) {
+          console.error("Failed to stringify headers for SNS attribute:", e);
+        }
+      }
+
       // Add Datadog trace ID if available
       if (datadogTraceId) {
         messageAttributes["x-datadog-trace-id"] = {

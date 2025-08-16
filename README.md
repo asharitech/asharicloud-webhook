@@ -33,6 +33,7 @@ API Gateway → Lambda (Handler) → MongoDB
 - **Concurrent Processing**: MongoDB storage and SNS publishing run in parallel
 - **Connection Pooling**: Reuses MongoDB connections across Lambda invocations
 - **Correlation Tracking**: Preserves X-Correlation-ID and X-Request-ID headers
+- **Header Forwarding**: All original HTTP headers are forwarded as SNS message attribute
 
 ## Deployment
 
@@ -95,6 +96,21 @@ curl -X POST https://cdprwuho0k.execute-api.ap-southeast-3.amazonaws.com/v1/webh
   "processing_time_ms": 150
 }
 ```
+
+## SNS Message Attributes
+
+The following attributes are included with each SNS message for filtering and routing:
+
+- `environment`: Environment name (prod/dev)
+- `method`: HTTP method (POST, PUT, PATCH, DELETE)
+- `path`: Request path from webhook
+- `contentType`: Content type of the payload
+- `x-correlation-id`: Correlation ID for request tracking
+- `x-request-id`: Request ID for tracing
+- `content-type`: Fixed as "application/json"
+- `headers`: JSON-stringified original HTTP headers (max 50KB)
+- `x-datadog-trace-id`: Datadog trace ID (if available)
+- `x-datadog-parent-id`: Datadog parent span ID (if available)
 
 ## SNS Subscribers
 
