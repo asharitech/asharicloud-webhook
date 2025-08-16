@@ -123,7 +123,16 @@ class SNSService {
       // This allows downstream services to access all original headers
       if (eventData.transport.headers) {
         try {
-          const headersJson = JSON.stringify(eventData.transport.headers);
+          // Safely construct headers object, excluding any "headers" key to avoid circular references
+          const constructedHeaders = {};
+          for (const [key, value] of Object.entries(eventData.transport.headers)) {
+            // Skip "headers" key if it exists to avoid potential circular references
+            if (key.toLowerCase() !== "headers") {
+              constructedHeaders[key] = value;
+            }
+          }
+          
+          const headersJson = JSON.stringify(constructedHeaders);
           // SNS attributes have a size limit, truncate if necessary
           // Each attribute value can be up to 256KB, but total message+attributes must be under 256KB
           const maxHeaderSize = 50000; // Conservative 50KB limit for headers attribute
