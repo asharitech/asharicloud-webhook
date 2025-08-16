@@ -59,12 +59,23 @@ class SNSService {
   }
 
   /**
-   * Publish webhook event to SNS topic
+   * Publish webhook event to SNS topic with enhanced message attributes
    * @param {string} topicArn - SNS topic ARN
    * @param {Object} eventData - The webhook event data to publish
+   * @param {Object} eventData.transport - Transport information including headers
+   * @param {Object} eventData.transport.headers - HTTP headers from the original request
+   * @param {string} eventData.transport.method - HTTP method (POST, PUT, PATCH, DELETE)
+   * @param {string} eventData.transport.path - Request path
+   * @param {*} eventData.payload - The webhook payload
+   * @param {string} eventData.type - Content type of the payload
    * @param {string} environment - Environment name (dev, prod, etc.)
    * @param {Object} trackingIds - Object containing correlationId and requestId
-   * @returns {Promise<Object>} Publish result
+   * @param {string} [trackingIds.correlationId] - Correlation ID for distributed tracing
+   * @param {string} [trackingIds.requestId] - Request ID for request tracking
+   * @param {string|null} datadogTraceId - Datadog trace ID for APM
+   * @param {string|null} datadogParentId - Datadog parent span ID for APM
+   * @returns {Promise<Object>} SNS publish result with MessageId
+   * @throws {Error} Throws error if SNS publish fails
    */
   async publishWebhookEvent(
     topicArn,
@@ -119,22 +130,42 @@ class SNSService {
         },
       };
 
-      // Add headers as JSON string attribute for downstream services
-      // This allows downstream services to access all original headers
+      /**
+       * Add headers as JSON string attribute for downstream services
+       * This allows downstream services to access all original HTTP headers
+       * for advanced filtering, routing, and request context preservation.
+       * 
+       * Headers are sanitized to exclude any "headers" key (case-insensitive)
+       * to prevent potential circular references during JSON serialization.
+       * 
+       * @example
+       * Input headers: {
+       *   "Content-Type": "application/json",
+       *   "User-Agent": "BrainyBuddy-API/3.13.1",
+       *   "X-Correlation-ID": "96fde7a0efbfd9e0-AMS"
+       * }
+       * Output attribute: '{"Content-Type":"application/json","User-Agent":"BrainyBuddy-API/3.13.1","X-Correlation-ID":"96fde7a0efbfd9e0-AMS"}'
+       */
       if (eventData.transport.headers) {
         try {
           // Safely construct headers object, excluding any "headers" key to avoid circular references
           const constructedHeaders = {};
           for (const [key, value] of Object.entries(eventData.transport.headers)) {
             // Skip "headers" key if it exists to avoid potential circular references
+            // This prevents issues if a malicious or malformed request includes a "headers" header
             if (key.toLowerCase() !== "headers") {
               constructedHeaders[key] = value;
             }
           }
           
           const headersJson = JSON.stringify(constructedHeaders);
-          // SNS attributes have a size limit, truncate if necessary
-          // Each attribute value can be up to 256KB, but total message+attributes must be under 256KB
+          
+          /**
+           * SNS message attributes have size constraints:
+           * - Each attribute value can be up to 256KB
+           * - Total message + all attributes must be under 256KB
+           * We use a conservative 50KB limit to ensure the total message stays within bounds
+           */
           const maxHeaderSize = 50000; // Conservative 50KB limit for headers attribute
           if (headersJson.length <= maxHeaderSize) {
             messageAttributes["headers"] = {
